@@ -38,6 +38,7 @@ from peft import (  # noqa: E402
     SVDLora_res_v3_Config,
     # SVDLora_res_v1_Config,
     SVDDora_Config,
+    AdaSVD_Config,
     BottleneckConfig,
     PrefixTuningConfig,
     get_peft_model,
@@ -290,55 +291,13 @@ def train(
             bias="none",
             task_type="CAUSAL_LM",
         )
-    elif adapter_name == "svdlora_v3":
-        print("SVD LoRA v2 init")
-        config = SVDLora_v3_Config(
+    elif adapter_name == "adasvd":
+        print("AdaSVD init")
+        config = AdaSVD_Config(
             r=lora_r,
             lora_alpha=lora_alpha,
             target_modules=target_modules,
             lora_dropout=lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-    elif adapter_name == 'svdlora_res_v1':
-        print("SVD LoRA Residual init")
-        config = SVDLora_res_v1_Config(
-            r=lora_r,
-            lora_alpha=lora_alpha,
-            target_modules=target_modules,
-            lora_dropout=lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-    elif adapter_name == 'svdlora_res_v2':
-        print("SVD LoRA Residual init")
-        config = SVDLora_res_v2_Config(
-            r=lora_r,
-            lora_alpha=lora_alpha,
-            target_modules=target_modules,
-            lora_dropout=lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-    elif adapter_name == 'svdlora_res_v3':
-        print("SVD LoRA Residual init")
-        config = SVDLora_res_v3_Config(
-            r=lora_r,
-            lora_alpha=lora_alpha,
-            target_modules=target_modules,
-            lora_dropout=lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-    elif adapter_name == "bottleneck":
-        config = BottleneckConfig(
-            bottleneck_size=bottleneck_size,
-            non_linearity=non_linearity,
-            adapter_dropout=adapter_dropout,
-            use_parallel_adapter=use_parallel_adapter,
-            use_adapterp=use_adapterp,
-            target_modules=target_modules,
-            scaling=scaling,
             bias="none",
             task_type="CAUSAL_LM",
         )

@@ -76,16 +76,9 @@ def get_peft_model_state_dict(model, state_dict=None):
                     if bias_name in state_dict:
                         to_return[bias_name] = state_dict[bias_name]
     elif (
-            # model.peft_config.peft_type == PeftType.SVDLORA or 
-            # model.peft_config.peft_type == PeftType.SVDinitLORA_v1 or 
-            # model.peft_config.peft_type == PeftType.SVDinitLORA_v3
             model.peft_config.peft_type == PeftType.SVDLORA or
             model.peft_config.peft_type == PeftType.SVDLORA_v2 or
-            model.peft_config.peft_type == PeftType.SVDLORA_v3 or
-            model.peft_config.peft_type == PeftType.SVDLORA_res_v1 or
-            model.peft_config.peft_type == PeftType.SVDLORA_res_v2 or
-            model.peft_config.peft_type == PeftType.SVDLORA_res_v3 
-            # model.peft_config.peft_type == PeftType.SVDLORA_res_v4
+            model.peft_config.peft_type == PeftType.ADASVD
         ):
 
         bias = model.peft_config.bias

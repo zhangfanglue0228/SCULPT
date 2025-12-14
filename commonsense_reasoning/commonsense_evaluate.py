@@ -89,7 +89,8 @@ def main(
             args.adapter == "DoRA" or 
             args.adapter == "SVDLoRA" or
             args.adapter == "SVDLoRA_v2" or
-            args.adapter == "SVDDoRA"
+            args.adapter == "SVDDoRA" or
+            args.adapter == "AdaSVD"
         ):
         print("Merge LoRA/DoRA weights into the original weights")
         key_list = [(key,module) for key, module in model.model.named_modules()]
