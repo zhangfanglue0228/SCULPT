@@ -1,0 +1,17 @@
+*.ipynb
+*.xlsx
+*.__pycache__
+*.pyc
+*.pt
+test.py
+/dataset
+/ft-training_set
+/.vscode
+/peft/src/peft/__pycache__
+/peft/src/peft/tuners/__pycache__
+/peft/src/peft/utils/__pycache__
+/outputs
+/.outputs
+/experiment
+/__pycache__
+/cache
