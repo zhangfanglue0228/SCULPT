@@ -1,6 +1,6 @@
 # SCULPT
 
-**S**pectral **C**omponents **U**pdate with **L**earned **P**runing adap**T**ation
+**S**ingular-value **C**omputed **U**pdate with **L**earned **P**runing adap**T**ation
 
 ## Method
 ### 1. 核心动机 (Motivation)
