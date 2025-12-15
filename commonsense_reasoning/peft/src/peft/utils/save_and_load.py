@@ -78,7 +78,7 @@ def get_peft_model_state_dict(model, state_dict=None):
     elif (
             model.peft_config.peft_type == PeftType.SVDLORA or
             model.peft_config.peft_type == PeftType.SVDLORA_v2 or
-            model.peft_config.peft_type == PeftType.ADASVD
+            model.peft_config.peft_type == PeftType.SCULPT
         ):
 
         bias = model.peft_config.bias

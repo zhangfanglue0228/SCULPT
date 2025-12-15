@@ -47,7 +47,7 @@ from .tuners import (
     SVDLora_res_v3_Config,
     # SVDLora_res_v1_Config,
     SVDDora_Config,
-    AdaSVD_Config,
+    SCULPT_Config,
 )
 from .utils import PromptLearningConfig
 
@@ -77,7 +77,7 @@ PEFT_TYPE_TO_CONFIG_MAPPING = {
     "SVDLORA_res_v3": SVDLora_res_v3_Config,
     # "SVDLORA_res_v1": SVDLora_res_v1_Config,
     "SVDDORA": SVDDora_Config,
-    "ADASVD": AdaSVD_Config,
+    "SCULPT": SCULPT_Config,
 }
 
 TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING = {
@@ -219,7 +219,7 @@ def _prepare_svddora_config(peft_config, model_config):
         peft_config.merge_weights = True
     return peft_config
 
-def _prepare_adasvd_config(peft_config, model_config):
+def _prepare_sculpt_config(peft_config, model_config):
     if peft_config.target_modules is None:
         if model_config["model_type"] not in TRANSFORMERS_MODELS_TO_LORA_TARGET_MODULES_MAPPING:
             raise ValueError("Please specify `target_modules` in `peft_config`")
@@ -305,8 +305,8 @@ def get_peft_model(model, peft_config):
         elif peft_config.peft_type == "SVDLORA_v3":
             peft_config = _prepare_svdlora_config(peft_config, model_config)
             return PeftModel(model, peft_config)
-        elif peft_config.peft_type == "ADASVD":
-            peft_config = _prepare_adasvd_config(peft_config, model_config)
+        elif peft_config.peft_type == "SCULPT":
+            peft_config = _prepare_sculpt_config(peft_config, model_config)
             return PeftModel(model, peft_config)
         elif "SVDLORA_res" in peft_config.peft_type:
             peft_config = _prepare_svdlora_res_config(peft_config, model_config)
@@ -329,8 +329,8 @@ def get_peft_model(model, peft_config):
             peft_config = _prepare_svdlora_config(peft_config, model_config)
         elif peft_config.peft_type == "SVDLORA_v3":
             peft_config = _prepare_svdlora_config(peft_config, model_config)
-        elif peft_config.peft_type == "ADASVD":
-            peft_config = _prepare_adasvd_config(peft_config, model_config)
+        elif peft_config.peft_type == "SCULPT":
+            peft_config = _prepare_sculpt_config(peft_config, model_config)
         elif "SVDLORA_res" in peft_config.peft_type:
             peft_config = _prepare_svdlora_res_config(peft_config, model_config)
     else:

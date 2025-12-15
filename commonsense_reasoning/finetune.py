@@ -18,6 +18,9 @@ import transformers
 from datasets import load_dataset
 from typing import List, Optional, Union
 
+from utils.svdloraTrainer import svdloraTrainer
+from utils.sculptTrainer import sculptTrainer
+
 """
 Unused imports:
 import torch.nn as nn
@@ -38,7 +41,7 @@ from peft import (  # noqa: E402
     SVDLora_res_v3_Config,
     # SVDLora_res_v1_Config,
     SVDDora_Config,
-    AdaSVD_Config,
+    SCULPT_Config,
     BottleneckConfig,
     PrefixTuningConfig,
     get_peft_model,
@@ -52,7 +55,7 @@ from utils.model_utils import get_trainer, make_sequential_train
 
 def train(
         lambda_oc: float = 1,
-        seq_train: list = [],  # whether to train lora_A and lora_B sequentially
+        # seq_train: list = [],  # whether to train lora_A and lora_B sequentially
         # model/data params
         base_model: str = "",  # the only required argument
         data_path: str = "yahma/alpaca-cleaned",
@@ -102,7 +105,7 @@ def train(
     print(
         f"Finetuning model with params:\n"
         f"lambda_oc: {lambda_oc}\n"
-        f"seq_trian: {seq_train}\n"
+        # f"seq_trian: {seq_train}\n"
         f"base_model: {base_model}\n"
         f"data_path: {data_path}\n"
         f"output_dir: {output_dir}\n"
@@ -291,9 +294,9 @@ def train(
             bias="none",
             task_type="CAUSAL_LM",
         )
-    elif adapter_name == "adasvd":
-        print("AdaSVD init")
-        config = AdaSVD_Config(
+    elif adapter_name == "sculpt":
+        print("SCULPT init")
+        config = SCULPT_Config(
             r=lora_r,
             lora_alpha=lora_alpha,
             target_modules=target_modules,
@@ -366,7 +369,8 @@ def train(
     ).__get__(model, type(model))
 
     total_steps = len(train_data) // batch_size * num_epochs
-    max_steps = total_steps // 2 if seq_train else total_steps
+    # max_steps = total_steps // 2 if seq_train else total_steps
+    max_steps = total_steps
 
     trainer_params = dict(
         model=model,
@@ -402,39 +406,16 @@ def train(
     )
     start_time = time.time()
     
-    if seq_train:
-        seq_lora_train = [s.replace("U", "lora_B").replace("V", "lora_A") for s in seq_train]
-        #### Train lora_A
-        print("Training lora_A only...")
-        make_sequential_train(model, freeze_module=seq_lora_train[1], unfreeze_module=seq_lora_train[0])
-        model.print_trainable_parameters()
-        trainer_params["model"] = model
-        trainer_params["args"].output_dir = os.path.join(output_dir, seq_train[0])
-        os.makedirs(trainer_params["args"].output_dir, exist_ok=True)
-        
-        trainer = get_trainer(lambda_oc, trainer_params)
-
-        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-
-        #### Train lora_B
-        print("Training lora_B only...")
-        make_sequential_train(model, freeze_module=seq_lora_train[0], unfreeze_module=seq_lora_train[1])
-        model.print_trainable_parameters()
-        trainer_params["model"] = model
-        trainer_params["args"].output_dir = os.path.join(output_dir, seq_train[1])
-        os.makedirs(trainer_params["args"].output_dir, exist_ok=True)
-        
-        trainer = get_trainer(lambda_oc, trainer_params)
-        
-        if torch.__version__ >= "2" and sys.platform != "win32":
-            model = torch.compile(model)
-        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     
+    if adapter_name == "svdlora":
+        trainer = svdloraTrainer(lambda_oc=lambda_oc, **trainer_params)
+    # elif adapter_name == "sculpt":
+    #     trainer = sculptTrainer(lambda_oc=lambda_oc, **trainer_params)
     else:
-        trainer = get_trainer(lambda_oc, trainer_params)
-        if torch.__version__ >= "2" and sys.platform != "win32":
-            model = torch.compile(model)
-        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        trainer = transformers.Trainer(**trainer_params)
+    if torch.__version__ >= "2" and sys.platform != "win32":
+        model = torch.compile(model)
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     
     end_time = time.time()
     training_time = end_time - start_time

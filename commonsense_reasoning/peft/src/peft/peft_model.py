@@ -55,7 +55,7 @@ from .tuners import (
         SVDLora_res_v3_Model,
         # SVDLora_res_v1_Model,
         SVDDora_Model,
-        AdaSVD_Model,
+        SCULPT_Model,
     )
 from .utils import (
     TRANSFORMERS_MODELS_TO_PREFIX_TUNING_POSTPROCESS_MAPPING,
@@ -122,8 +122,8 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
                 self.base_model = SVDLora_Model(peft_config, model)
             elif self.peft_config.peft_type == PeftType.SVDLORA_v2:
                 self.base_model = SVDLora_v2_Model(peft_config, model)
-            elif self.peft_config.peft_type == PeftType.ADASVD:
-                self.base_model = AdaSVD_Model(peft_config, model)
+            elif self.peft_config.peft_type == PeftType.SCULPT:
+                self.base_model = SCULPT_Model(peft_config, model)
             # elif self.peft_config.peft_type == PeftType.SVDLORA_res_v4:
             #     self.base_model = SVDLora_res_v4_Model(peft_config, model)
         if getattr(self.peft_config, "modules_to_save", None) is not None:
@@ -233,7 +233,7 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
                     model.peft_config.peft_type == PeftType.SVDLORA or
                     model.peft_config.peft_type == PeftType.SVDLORA_v2 or
                     model.peft_config.peft_type == PeftType.SVDDORA or
-                    model.peft_config.peft_type == PeftType.ADASVD
+                    model.peft_config.peft_type == PeftType.SCULPT
                 ):
                 add_hook_to_module(model.base_model.model, hook)
             else:

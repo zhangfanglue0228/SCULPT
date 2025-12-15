@@ -23,9 +23,9 @@ if is_bnb_available():
 
 
 @dataclass
-class AdaSVD_Config(PeftConfig):
+class SCULPT_Config(PeftConfig):
     """
-    lue
+    SCULPT Config
     """
 
     r: int = field(default=8, metadata={"help": "Lora attention dimension"})
@@ -63,7 +63,7 @@ class AdaSVD_Config(PeftConfig):
         self.peft_type = PeftType.SVDLORA
 
 
-class AdaSVD_Model(torch.nn.Module):
+class SCULPT_Model(torch.nn.Module):
     """
     lue
     """

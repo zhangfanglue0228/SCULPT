@@ -20,7 +20,7 @@
 
 from .svdlora import SVDLora_Config, SVDLora_Model
 from .svddora import SVDDora_Config, SVDDora_Model
-from .adasvd import AdaSVD_Config, AdaSVD_Model
+from .sculpt import SCULPT_Config, SCULPT_Model
 
 from .dora import DoraConfig, DoraModel
 from .lora import LoraConfig, LoraModel

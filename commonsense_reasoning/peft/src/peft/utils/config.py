@@ -37,7 +37,7 @@ class PeftType(str, enum.Enum):
     SVDLORA = "SVDLORA"
     SVDLORA_v2 = "SVDLORA_v2"
     SVDDORA = "SVDDORA"
-    ADASVD = "ADASVD"
+    SCULPT = "SCULPT"
 
 
 

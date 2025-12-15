@@ -38,7 +38,7 @@ from peft import (  # noqa: E402
     SVDLora_res_v3_Config,
     # SVDLora_res_v1_Config,
     SVDDora_Config,
-    AdaSVD_Config,
+    SCULPT_Config,
     BottleneckConfig,
     PrefixTuningConfig,
     get_peft_model,
@@ -313,9 +313,9 @@ elif adapter_name == "svdlora_v2":
         bias="none",
         task_type="CAUSAL_LM",
     )
-elif adapter_name == "adasvd":
-    print("AdaSVD init")
-    config = AdaSVD_Config(
+elif adapter_name == "sculpt":
+    print("SCULPT init")
+    config = SCULPT_Config(
         r=lora_r,
         lora_alpha=lora_alpha,
         target_modules=target_modules,
