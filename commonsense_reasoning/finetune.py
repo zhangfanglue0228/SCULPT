@@ -18,8 +18,8 @@ import transformers
 from datasets import load_dataset
 from typing import List, Optional, Union
 
-from utils.svdloraTrainer import svdloraTrainer
-from utils.sculptTrainer import sculptTrainer
+from utils.svdlora_trainer import SvdloraTrainer
+from utils.sculpt_trainer import sculptTrainer
 
 """
 Unused imports:
@@ -408,7 +408,7 @@ def train(
     
     
     if adapter_name == "svdlora":
-        trainer = svdloraTrainer(lambda_oc=lambda_oc, **trainer_params)
+        trainer = SvdloraTrainer(lambda_oc=lambda_oc, **trainer_params)
     # elif adapter_name == "sculpt":
     #     trainer = sculptTrainer(lambda_oc=lambda_oc, **trainer_params)
     else:

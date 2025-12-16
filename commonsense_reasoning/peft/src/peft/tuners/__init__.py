@@ -19,6 +19,7 @@
 
 
 from .svdlora import SVDLora_Config, SVDLora_Model
+from .svdlora_v2 import SVDLora_v2_Config, SVDLora_v2_Model
 from .svddora import SVDDora_Config, SVDDora_Model
 from .sculpt import SCULPT_Config, SCULPT_Model
 

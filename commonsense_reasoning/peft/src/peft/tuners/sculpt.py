@@ -40,6 +40,7 @@ class SCULPT_Config(PeftConfig):
     lora_dropout: float = field(default=None, metadata={"help": "Dropout probability"})
     
     # SCULPT 参数
+    # 初始化参数
     init_r_multiplier: int = field(
         default=2, 
         metadata={"help": "Multiplier for initial rank. r_init = r * init_r_multiplier"}
@@ -51,6 +52,19 @@ class SCULPT_Config(PeftConfig):
     lasso_reg_weight: float = field(
         default=0.001,
         metadata={"help": "Weight for L1 (Lasso) regularization loss on singular values"}
+    )
+    # 剪枝调度参数
+    t_start: int = field(
+        default=100, 
+        metadata={"help": "Step to start pruning (Warmup steps). Before this, mask stays all-ones."}
+    )
+    t_end: int = field(
+        default=1000, 
+        metadata={"help": "Step to end pruning (Final tuning steps). After this, mask is frozen."}
+    )
+    pruning_freq: int = field(
+        default=10, 
+        metadata={"help": "Frequency of mask updates (delta T). Update mask every `pruning_freq` steps."}
     )
     
     # 兼容性参数
@@ -82,7 +96,7 @@ class SCULPT_Model(torch.nn.Module):
         self.peft_config = config
         self.model = model
         self._find_and_replace()
-        mark_only_sculpt_as_trainable(self.model, self.peft_config.bias)
+        mark_only_lora_as_trainable(self.model, self.peft_config.bias)
         self.forward = self.model.forward
 
     def _find_and_replace(self):
@@ -186,15 +200,15 @@ class SCULPT_Model(torch.nn.Module):
             s = s[:r_init]           # (r_init,)
             vh = vh[:r_init, :]      # (r_init, in)  -> lora_A (Up projection)
 
-        # Initialize Trainable Branch
-        new_module.lora_B.weight.data.copy_(u)
-        new_module.lora_sigma.weight.data.copy_(s.unsqueeze(1)) # (r, 1) to act as vector
-        new_module.lora_A.weight.data.copy_(vh)
+            # Initialize Trainable Branch
+            new_module.lora_B.weight.data.copy_(u)
+            new_module.lora_sigma.weight.data.copy_(s.unsqueeze(1)) # (r, 1) to act as vector
+            new_module.lora_A.weight.data.copy_(vh)
 
-        weight_low = torch.mm(u * s, vh)
-        weight_low = weight_low * new_module.scaling
-        weight_low = transpose(weight_low, new_module.fan_in_fan_out)
-        new_module.weight.data -= weight_low.to(new_module.weight.device)
+            weight_low = torch.mm(u * s, vh)
+            weight_low = weight_low * new_module.scaling
+            weight_low = transpose(weight_low, new_module.fan_in_fan_out)
+            new_module.weight.data -= weight_low.to(new_module.weight.device)
 
         # Clean up
         del u, s, vh, weight_low, weight_for_svd
@@ -245,6 +259,7 @@ def mark_only_lora_as_trainable(model: nn.Module, bias: str = "none") -> None:
                 m.bias.requires_grad = True
     else:
         raise NotImplementedError   
+
 
 class SCULPTLayer:
     def __init__(
@@ -454,7 +469,7 @@ class SCULPTLinear(nn.Linear, SCULPTLayer):
         return result
     
 
-class MergedLinear(nn.Linear, LoraLayer):
+class MergedLinear(nn.Linear, SCULPTLayer):
     # Lora implemented in a dense layer
     def __init__(
         self,
@@ -473,7 +488,7 @@ class MergedLinear(nn.Linear, LoraLayer):
 
 if is_bnb_available():
 
-    class Linear8bitLt(bnb.nn.Linear8bitLt, LoraLayer):
+    class Linear8bitLt(bnb.nn.Linear8bitLt, SCULPTLayer):
         # Lora implemented in a dense layer
         def __init__(
             self,
@@ -487,7 +502,7 @@ if is_bnb_available():
         ):
             raise NotImplementedError
 
-    class MergedLinear8bitLt(bnb.nn.Linear8bitLt, LoraLayer):
+    class MergedLinear8bitLt(bnb.nn.Linear8bitLt, SCULPTLayer):
         # Lora implemented in a dense layer
         def __init__(
             self,

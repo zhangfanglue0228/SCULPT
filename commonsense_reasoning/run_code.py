@@ -32,10 +32,10 @@ from peft import (  # noqa: E402
     # SVDinitLora_v3_Config,
     SVDLora_Config,
     SVDLora_v2_Config,
-    SVDLora_v3_Config,
-    SVDLora_res_v1_Config,
-    SVDLora_res_v2_Config,
-    SVDLora_res_v3_Config,
+    # SVDLora_v3_Config,
+    # SVDLora_res_v1_Config,
+    # SVDLora_res_v2_Config,
+    # SVDLora_res_v3_Config,
     # SVDLora_res_v1_Config,
     SVDDora_Config,
     SCULPT_Config,
@@ -115,12 +115,17 @@ def generate_and_tokenize_prompt(data_point):
 
 
 # model/data params
-lambda_oc: float = 0
-seq_train: list = ['U', 'V']
-base_model: str = "../../../models/meta-llama/Meta-Llama-3-8B"  # the only required argument
+# lambda_oc: float = 0
+init_r_multiplier: int = 2
+orth_reg_weight: float = 0.01
+lasso_reg_weight: float = 0.001
+t_start: int = 100
+t_end: int = 1000
+pruning_freq: int = 10
+base_model: str = "/new_home/zhangfanglve/models/meta-llama/Meta-Llama-3-8B"  # the only required argument
 data_path: str = "./ft-training_set/commonsense_15k.json"
 output_dir: str = "./outputs/test"
-adapter_name: str = "svdlora_v2"
+adapter_name: str = "sculpt"
 load_8bit : bool = False
 # training hyperparams
 batch_size: int = 16
@@ -135,7 +140,7 @@ eval_step: int = 10
 save_step: int = 10
 # lora hyperparams
 lora_r: int = 32
-lora_alpha: int = 64
+lora_alpha: int = 32
 lora_dropout: float = 0.05
 lora_target_modules: List[str] = None
 # bottleneck adapter hyperparams
@@ -164,8 +169,14 @@ resume_from_checkpoint: str = None  # either training checkpoint or final adapte
 
 print(
     f"Finetuning model with params:\n"
-    f"lambda_oc: {lambda_oc}\n"
-    f"seq_train: {seq_train}\n"
+    # f"lambda_oc: {lambda_oc}\n"
+    # f"seq_train: {seq_train}\n"
+    f"init_r_multiplier: {init_r_multiplier}\n"
+    f"orth_reg_weight: {orth_reg_weight}\n"
+    f"lasso_reg_weight: {lasso_reg_weight}\n"
+    f"t_start: {t_start}\n"
+    f"t_end: {t_end}\n"
+    f"pruning_freq: {pruning_freq}\n"
     f"base_model: {base_model}\n"
     f"data_path: {data_path}\n"
     f"output_dir: {output_dir}\n"
@@ -294,17 +305,18 @@ elif adapter_name == "svddora":
         Wdecompose_target_modules=Wdecompose_target_modules
     )
 elif adapter_name == "svdlora":
-    print("SVD LoRA init")
+    print("SVDLoRA init")
     config = SVDLora_Config(
         r=lora_r,
         lora_alpha=lora_alpha,
         target_modules=target_modules,
         lora_dropout=lora_dropout,
+        orth_reg_weight=orth_reg_weight,
         bias="none",
         task_type="CAUSAL_LM",
     )
 elif adapter_name == "svdlora_v2":
-    print("SVD LoRA init")
+    print("SVDLoRA_v2 init")
     config = SVDLora_v2_Config(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -320,6 +332,12 @@ elif adapter_name == "sculpt":
         lora_alpha=lora_alpha,
         target_modules=target_modules,
         lora_dropout=lora_dropout,
+        init_r_multiplier=init_r_multiplier,
+        orth_reg_weight=orth_reg_weight,
+        lasso_reg_weight=lasso_reg_weight,
+        t_start=t_start,
+        t_end=t_end,
+        pruning_freq=pruning_freq,
         bias="none",
         task_type="CAUSAL_LM",
     )
@@ -432,37 +450,10 @@ trainer_params = dict(
 )
 
 start_time = time.time()
-
-if seq_train:
-    seq_train = [s.replace("U", "lora_B").replace("V", "lora_A") for s in seq_train]
-    #### Train lora_A
-    print("Training lora_A only...")
-    make_sequential_train(model, freeze_module=seq_train[1], unfreeze_module=seq_train[0])
-    model.print_trainable_parameters()
-    trainer_params["model"] = model
-    
-    trainer = get_trainer(lambda_oc, trainer_params)
-
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-
-    #### Train lora_B
-    print("Training lora_B only...")
-    make_sequential_train(model, freeze_module=seq_train[0], unfreeze_module=seq_train[1])
-    model.print_trainable_parameters()
-    trainer_params["model"] = model
-    
-    trainer = get_trainer(lambda_oc, trainer_params)
-    
-    if torch.__version__ >= "2" and sys.platform != "win32":
-        model = torch.compile(model)
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-
-else:
-    trainer = get_trainer(lambda_oc, trainer_params)
-    if torch.__version__ >= "2" and sys.platform != "win32":
-        model = torch.compile(model)
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    
+trainer = get_trainer(trainer_params)
+if torch.__version__ >= "2" and sys.platform != "win32":
+    model = torch.compile(model)
+trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 end_time = time.time()
 
 model.save_pretrained(output_dir)

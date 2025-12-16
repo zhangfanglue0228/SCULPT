@@ -4,16 +4,20 @@ import torch.nn as nn
 from tqdm import tqdm
 
 
-from utils.svdloraTrainer import svdloraTrainer
+from utils.svdlora_trainer import SvdloraTrainer
+# from utils.sculptTrainer import sculptTrainer
 
 def transpose(weight, fan_in_fan_out):
     return weight.T if fan_in_fan_out else weight
 
-def get_trainer(lambda_oc, trainer_params):
-    if lambda_oc == 0:
-        trainer = transformers.Trainer(**trainer_params)
+def get_trainer(trainer_params):
+    peft_type = trainer_params['model'].peft_config.peft_type
+    if "SVDLoRA" in peft_type or "SCULPT" in peft_type:
+        trainer = SvdloraTrainer(**trainer_params)
+    # elif "SCULPT" in peft_type:
+    #     trainer = sculptTrainer(**trainer_params)
     else:
-        trainer = svdloraTrainer(lambda_oc=lambda_oc, **trainer_params)
+        trainer = transformers.Trainer(**trainer_params)
 
     return trainer
 

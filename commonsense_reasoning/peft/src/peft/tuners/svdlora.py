@@ -38,6 +38,12 @@ class SVDLora_Config(PeftConfig):
     )
     lora_alpha: int = field(default=None, metadata={"help": "Lora alpha"})
     lora_dropout: float = field(default=None, metadata={"help": "Lora dropout"})
+
+    orth_reg_weight: float = field(
+        default=0.01,
+        metadata={"help": "Weight for orthogonal regularization loss"}
+    )
+
     merge_weights: bool = field(
         default=False, metadata={"help": "Merge weights of the original model and the Lora model"}
     )

@@ -2,10 +2,11 @@ import torch
 
 from transformers import Trainer
 
-class svdloraTrainer(Trainer):
-    def __init__(self, lambda_oc=1e-3, *args, **kwargs):
+class SvdloraTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.lambda_oc = lambda_oc
+        model = kwargs.get('model')
+        self.orth_reg_weight = getattr(getattr(model, 'peft_config', None), 'orth_reg_weight', 1e-1)
     def compute_loss(self, model, inputs, return_outputs=False):
         original_return = super().compute_loss(model, inputs, return_outputs)
         if return_outputs:
@@ -31,6 +32,6 @@ class svdloraTrainer(Trainer):
 
                 reg_loss += (reg_U + reg_V)
         
-        loss = original_loss + self.lambda_oc * reg_loss
+        loss = original_loss + self.orth_reg_weight * reg_loss
 
         return (loss, outputs) if return_outputs else loss
