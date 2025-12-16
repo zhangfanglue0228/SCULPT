@@ -1,12 +1,19 @@
 import torch
+import logging
 
 from transformers import Trainer
+
+logger = logging.getLogger(__name__)
 
 class SvdloraTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        model = kwargs.get('model')
-        self.orth_reg_weight = getattr(getattr(model, 'peft_config', None), 'orth_reg_weight', 1e-1)
+        if hasattr(self.model, "peft_config"):
+            self.orth_reg_weight = self.model.peft_config.orth_reg_weight
+        else:
+            logger.warning("SVDLORA config not found in model. Regularization losses will be disabled.")
+            self.orth_reg_weight = 0.0
+
     def compute_loss(self, model, inputs, return_outputs=False):
         original_return = super().compute_loss(model, inputs, return_outputs)
         if return_outputs:
