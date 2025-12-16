@@ -95,6 +95,7 @@ class SCULPT_Model(torch.nn.Module):
         super().__init__()
         self.peft_config = config
         self.model = model
+        self.sculpt_layers = []
         self._find_and_replace()
         mark_only_lora_as_trainable(self.model, self.peft_config.bias)
         self.forward = self.model.forward
@@ -150,6 +151,7 @@ class SCULPT_Model(torch.nn.Module):
                 elif isinstance(target, torch.nn.Linear):
                     # Standard Linear Layer Replacement
                     new_module = SCULPTLinear(target.in_features, target.out_features, bias=bias, **kwargs)
+                    self.sculpt_layers.append(new_module)
                 else:
                     kwargs.update({"enable_lora": self.peft_config.enable_lora})
                     if isinstance(target, Conv1D):
@@ -282,6 +284,8 @@ class SCULPTLayer:
         self.merged = False
         self.merge_weights = merge_weights
         self.disable_adapters = False
+
+        self.is_sculpt_layer = True
 
 
 class SCULPTLinear(nn.Linear, SCULPTLayer):
