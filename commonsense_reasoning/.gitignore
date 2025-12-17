@@ -16,3 +16,4 @@ test.py
 /__pycache__
 /cache
 /scripts
+/wandb
