@@ -32,9 +32,12 @@ class SculptTrainer(Trainer):
             self.orth_reg_weight = 0.0
             self.lasso_reg_weight = 0.0
         
-        self._last_task_loss = 0.0
-        self._last_orth_loss = 0.0
-        self._last_lasso_loss = 0.0
+        self._metrics_buffer = {
+            "task_loss": 0.0,
+            "orth_loss": 0.0,
+            "lasso_loss": 0.0,
+            "count": 0  # 记录累积了多少次
+        }
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
@@ -51,32 +54,31 @@ class SculptTrainer(Trainer):
 
         # 2. Compute Regularization Losses
         # We iterate over the cached layers in scheduler to save performance (no re-scanning model)
-        orth_loss = 0.0
-        lasso_loss = 0.0
 
         if model.training:
-            self._last_task_loss = loss.item() if torch.is_tensor(loss) else loss
+            self._metrics_buffer["task_loss"] += loss.item() if torch.is_tensor(loss) else loss
+            self._metrics_buffer["count"] += 1
         
-        # Check if we need to compute reg loss (optimization)
-        if self.orth_reg_weight > 0 or self.lasso_reg_weight > 0:
-            for layer in self.sculpt_scheduler.sculpt_layers:
-                # Accumulate Orthogonal Loss
-                if self.orth_reg_weight > 0:
-                    orth_loss += layer.get_orthogonal_loss()
+            # Check if we need to compute reg loss (optimization)
+            if self.orth_reg_weight > 0 or self.lasso_reg_weight > 0:
+                orth_loss = torch.tensor(0.0, device=loss.device)
+                lasso_loss = torch.tensor(0.0, device=loss.device)
+                for layer in self.sculpt_scheduler.sculpt_layers:
+                    # Accumulate Orthogonal Loss
+                    if self.orth_reg_weight > 0:
+                        orth_loss += layer.get_orthogonal_loss()
+                    
+                    # Accumulate Lasso (L1) Loss on singular values
+                    if self.lasso_reg_weight > 0:
+                        lasso_loss += layer.get_l1_norm()
                 
-                # Accumulate Lasso (L1) Loss on singular values
-                if self.lasso_reg_weight > 0:
-                    lasso_loss += layer.get_l1_norm()
-            
-            if model.training:
-                self._last_orth_loss = orth_loss.item() if torch.is_tensor(orth_loss) else orth_loss
-                self._last_lasso_loss = lasso_loss.item() if torch.is_tensor(lasso_loss) else lasso_loss
-            
-
-            # 3. Combine Losses
-            # Scale by their respective lambdas
-            total_reg_loss = (self.orth_reg_weight * orth_loss) + (self.lasso_reg_weight * lasso_loss)
-            loss += total_reg_loss
+                self._metrics_buffer["orth_loss"] += orth_loss.item() if torch.is_tensor(orth_loss) else orth_loss
+                self._metrics_buffer["lasso_loss"] += lasso_loss.item() if torch.is_tensor(lasso_loss) else lasso_loss
+                
+                # 3. Combine Losses
+                # Scale by their respective lambdas
+                total_reg_loss = (self.orth_reg_weight * orth_loss) + (self.lasso_reg_weight * lasso_loss)
+                loss += total_reg_loss
 
         return (loss, outputs) if return_outputs else loss
 
@@ -96,13 +98,25 @@ class SculptTrainer(Trainer):
             logs = {}
             if sculpt_metrics:
                 logs.update(sculpt_metrics)
-            current_total_loss = loss.item() if torch.is_tensor(loss) else loss
-            logs["sculpt/total_loss"] = current_total_loss
-            logs["sculpt/task_loss"] = self._last_task_loss
-            if self.orth_reg_weight > 0:
-                logs["sculpt/orth_loss"] = self._last_orth_loss
-            if self.lasso_reg_weight > 0:
-                logs["sculpt/lasso_loss"] = self._last_lasso_loss
+            count = self._metrics_buffer["count"]
+            if count > 0:
+                avg_task = self._metrics_buffer["task_loss"] / count
+                avg_orth = self._metrics_buffer["orth_loss"] / count
+                avg_lasso = self._metrics_buffer["lasso_loss"] / count
+
+                avg_total = avg_task + \
+                            (self.orth_reg_weight * avg_orth) + \
+                            (self.lasso_reg_weight * avg_lasso)
+
+                logs["sculpt/loss_total"] = avg_total
+                logs["sculpt/loss_task"] = avg_task
+                if self.orth_reg_weight > 0:
+                    logs["sculpt/loss_orth"] = avg_orth
+                if self.lasso_reg_weight > 0:
+                    logs["sculpt/loss_lasso"] = avg_lasso
+                
+                # 重置 Buffer
+                self._metrics_buffer = {k: 0.0 for k in self._metrics_buffer}
             
             if logs:
                 self.log(logs)

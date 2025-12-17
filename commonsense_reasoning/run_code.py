@@ -117,9 +117,9 @@ def generate_and_tokenize_prompt(data_point):
 # model/data params
 # lambda_oc: float = 0
 init_r_multiplier: int = 2
-orth_reg_weight: float = 0.01
-lasso_reg_weight: float = 0.001
-t_start: int = 100
+orth_reg_weight: float = 0.1
+lasso_reg_weight: float = 0.0001
+t_start: int = 30
 t_end: int = 1000
 pruning_freq: int = 10
 base_model: str = "/new_home/zhangfanglve/models/meta-llama/Meta-Llama-3-8B"  # the only required argument
@@ -136,12 +136,12 @@ weight_decay: float = 0.0
 cutoff_len: int = 256
 val_set_size: int = 120
 use_gradient_checkpointing: bool = True
-eval_step: int = 10
-save_step: int = 10
+eval_step: int = 25
+save_step: int = 25
 # lora hyperparams
 lora_r: int = 32
 lora_alpha: int = 32
-lora_dropout: float = 0.05
+lora_dropout: float = 0.0
 lora_target_modules: List[str] = None
 # bottleneck adapter hyperparams
 bottleneck_size: int = 256
@@ -246,7 +246,7 @@ else:
         base_model,
         load_in_8bit=False,
         torch_dtype=torch.float16,
-        # device_map={"": int(os.environ.get("LOCAL_RANK") or 0)},
+        # attn_implementation="flash_attention_2",  # 启用 Flash Attention 2
         device_map=device_map,
         trust_remote_code=True,
     )
@@ -425,8 +425,8 @@ trainer_params = dict(
         per_device_train_batch_size=micro_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
         warmup_steps=5,
-        # num_train_epochs=num_epochs,
-        max_steps=10,
+        num_train_epochs=num_epochs,
+        # max_steps=10,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         fp16=True,
@@ -451,6 +451,7 @@ trainer_params = dict(
 
 start_time = time.time()
 trainer = get_trainer(trainer_params)
+print(trainer)
 if torch.__version__ >= "2" and sys.platform != "win32":
     model = torch.compile(model)
 trainer.train(resume_from_checkpoint=resume_from_checkpoint)

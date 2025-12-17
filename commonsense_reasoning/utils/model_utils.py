@@ -5,17 +5,16 @@ from tqdm import tqdm
 
 
 from utils.svdlora_trainer import SvdloraTrainer
-# from utils.sculptTrainer import sculptTrainer
-
+from utils.sculpt_trainer import SculptTrainer
 def transpose(weight, fan_in_fan_out):
     return weight.T if fan_in_fan_out else weight
 
 def get_trainer(trainer_params):
     peft_type = trainer_params['model'].peft_config.peft_type
-    if "SVDLoRA" in peft_type or "SCULPT" in peft_type:
+    if "SVDLORA" in peft_type.upper():
         trainer = SvdloraTrainer(**trainer_params)
-    # elif "SCULPT" in peft_type:
-    #     trainer = sculptTrainer(**trainer_params)
+    elif "SCULPT" in peft_type.upper():
+        trainer = SculptTrainer(**trainer_params)
     else:
         trainer = transformers.Trainer(**trainer_params)
 
