@@ -35,10 +35,10 @@ from peft import (  # noqa: E402
     # SVDinitLora_v3_Config,
     SVDLora_Config,
     SVDLora_v2_Config,
-    SVDLora_v3_Config,
-    SVDLora_res_v1_Config,
-    SVDLora_res_v2_Config,
-    SVDLora_res_v3_Config,
+    # SVDLora_v3_Config,
+    # SVDLora_res_v1_Config,
+    # SVDLora_res_v2_Config,
+    # SVDLora_res_v3_Config,
     # SVDLora_res_v1_Config,
     SVDDora_Config,
     SCULPT_Config,
@@ -54,8 +54,12 @@ from utils.model_utils import get_trainer, make_sequential_train
 
 
 def train(
-        lambda_oc: float = 1,
-        # seq_train: list = [],  # whether to train lora_A and lora_B sequentially
+        init_r_multiplier: int = 2,
+        orth_reg_weight: float = 0.01,
+        lasso_reg_weight: float = 0.001,
+        t_start: int = 100,
+        t_end: int = 1000,
+        pruning_freq: int = 10,
         # model/data params
         base_model: str = "",  # the only required argument
         data_path: str = "yahma/alpaca-cleaned",
@@ -102,10 +106,16 @@ def train(
         wandb_log_model: str = "",  # options: false | true
         resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
 ):
+    hyperparams = locals().copy()
     print(
         f"Finetuning model with params:\n"
-        f"lambda_oc: {lambda_oc}\n"
-        # f"seq_trian: {seq_train}\n"
+        f"init_r_multiplier: {init_r_multiplier}\n"
+        f"orth_reg_weight: {orth_reg_weight}\n"
+        f"lasso_reg_weight: {lasso_reg_weight}\n"
+        f"t_start: {t_start}\n"
+        
+        f"t_end: {t_end}\n"
+        f"pruning_freq: {pruning_freq}\n"
         f"base_model: {base_model}\n"
         f"data_path: {data_path}\n"
         f"output_dir: {output_dir}\n"
@@ -155,6 +165,17 @@ def train(
     use_wandb = len(wandb_project) > 0 or (
             "WANDB_PROJECT" in os.environ and len(os.environ["WANDB_PROJECT"]) > 0
     )
+    if not use_wandb:
+        import wandb
+        run_name = wandb_run_name if len(wandb_run_name) > 0 else os.environ.get("WANDB_NAME", None)
+        project_name = wandb_project if len(wandb_project) > 0 else os.environ.get("WANDB_PROJECT", "huggingface")
+        # 初始化 run，并传入 config
+        wandb.init(
+            project=project_name,
+            name=run_name,
+            config=hyperparams, # <--- 这里是关键！把所有参数传给 wandb
+            reinit=True         # 允许在同一进程中重新初始化（如果需要）
+        )
     # Only overwrite environ if wandb param passed
     if len(wandb_project) > 0:
         os.environ["WANDB_PROJECT"] = wandb_project
@@ -275,17 +296,18 @@ def train(
             Wdecompose_target_modules=Wdecompose_target_modules
         )
     elif adapter_name == "svdlora":
-        print("SVD LoRA init")
+        print("SVDLoRA init")
         config = SVDLora_Config(
             r=lora_r,
             lora_alpha=lora_alpha,
             target_modules=target_modules,
             lora_dropout=lora_dropout,
+            orth_reg_weight=orth_reg_weight,
             bias="none",
             task_type="CAUSAL_LM",
         )
     elif adapter_name == "svdlora_v2":
-        print("SVD LoRA v2 init")
+        print("SVDLoRA_v2 init")
         config = SVDLora_v2_Config(
             r=lora_r,
             lora_alpha=lora_alpha,
@@ -301,6 +323,24 @@ def train(
             lora_alpha=lora_alpha,
             target_modules=target_modules,
             lora_dropout=lora_dropout,
+            init_r_multiplier=init_r_multiplier,
+            orth_reg_weight=orth_reg_weight,
+            lasso_reg_weight=lasso_reg_weight,
+            t_start=t_start,
+            t_end=t_end,
+            pruning_freq=pruning_freq,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+    elif adapter_name == "bottleneck":
+        config = BottleneckConfig(
+            bottleneck_size=bottleneck_size,
+            non_linearity=non_linearity,
+            adapter_dropout=adapter_dropout,
+            use_parallel_adapter=use_parallel_adapter,
+            use_adapterp=use_adapterp,
+            target_modules=target_modules,
+            scaling=scaling,
             bias="none",
             task_type="CAUSAL_LM",
         )
@@ -368,10 +408,6 @@ def train(
         )
     ).__get__(model, type(model))
 
-    total_steps = len(train_data) // batch_size * num_epochs
-    # max_steps = total_steps // 2 if seq_train else total_steps
-    max_steps = total_steps
-
     trainer_params = dict(
         model=model,
         train_dataset=train_data,
@@ -405,18 +441,10 @@ def train(
         )
     )
     start_time = time.time()
-    
-    
-    if adapter_name == "svdlora":
-        trainer = SvdloraTrainer(lambda_oc=lambda_oc, **trainer_params)
-    # elif adapter_name == "sculpt":
-    #     trainer = sculptTrainer(lambda_oc=lambda_oc, **trainer_params)
-    else:
-        trainer = transformers.Trainer(**trainer_params)
+    trainer = get_trainer(trainer_params)
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    
     end_time = time.time()
     training_time = end_time - start_time
     

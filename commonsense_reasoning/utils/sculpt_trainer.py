@@ -31,6 +31,10 @@ class SculptTrainer(Trainer):
             logger.warning("SCULPT config not found in model. Regularization losses will be disabled.")
             self.orth_reg_weight = 0.0
             self.lasso_reg_weight = 0.0
+        
+        self._last_task_loss = 0.0
+        self._last_orth_loss = 0.0
+        self._last_lasso_loss = 0.0
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
@@ -49,6 +53,9 @@ class SculptTrainer(Trainer):
         # We iterate over the cached layers in scheduler to save performance (no re-scanning model)
         orth_loss = 0.0
         lasso_loss = 0.0
+
+        if model.training:
+            self._last_task_loss = loss.item() if torch.is_tensor(loss) else loss
         
         # Check if we need to compute reg loss (optimization)
         if self.orth_reg_weight > 0 or self.lasso_reg_weight > 0:
@@ -61,6 +68,11 @@ class SculptTrainer(Trainer):
                 if self.lasso_reg_weight > 0:
                     lasso_loss += layer.get_l1_norm()
             
+            if model.training:
+                self._last_orth_loss = orth_loss.item() if torch.is_tensor(orth_loss) else orth_loss
+                self._last_lasso_loss = lasso_loss.item() if torch.is_tensor(lasso_loss) else lasso_loss
+            
+
             # 3. Combine Losses
             # Scale by their respective lambdas
             total_reg_loss = (self.orth_reg_weight * orth_loss) + (self.lasso_reg_weight * lasso_loss)
@@ -79,7 +91,21 @@ class SculptTrainer(Trainer):
         
         # 2. SCULPT 剪枝（仅在梯度同步时执行）
         if self.accelerator.sync_gradients:
-            self.sculpt_scheduler.step(self.state.global_step)
+            sculpt_metrics = self.sculpt_scheduler.step(self.state.global_step)
+
+            logs = {}
+            if sculpt_metrics:
+                logs.update(sculpt_metrics)
+            current_total_loss = loss.item() if torch.is_tensor(loss) else loss
+            logs["sculpt/total_loss"] = current_total_loss
+            logs["sculpt/task_loss"] = self._last_task_loss
+            if self.orth_reg_weight > 0:
+                logs["sculpt/orth_loss"] = self._last_orth_loss
+            if self.lasso_reg_weight > 0:
+                logs["sculpt/lasso_loss"] = self._last_lasso_loss
+            
+            if logs:
+                self.log(logs)
         
         # 3. 返回 loss
         return loss

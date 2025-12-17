@@ -156,6 +156,13 @@ class SculptScheduler:
             layer.update_mask(threshold)
             # Optional: gather stats
             total_kept += layer.mask.sum().item()
+        
+        metrics = {
+            "sculpt/budget": current_budget,
+            "sculpt/threshold": threshold,
+            "sculpt/sparsity": 1.0 - (total_kept / self.total_rank_init),
+            "sculpt/kept_ranks": total_kept
+        }
 
         # Logging
         if global_step % (self.pruning_freq * 10) == 0: # Log less frequently to avoid spam
@@ -165,3 +172,5 @@ class SculptScheduler:
                 f"Budget: {current_budget} | Kept: {int(total_kept)} | "
                 f"Threshold: {threshold:.6f} | Global Sparsity: {current_sparsity:.2%}"
             )
+        
+        return metrics
