@@ -326,7 +326,7 @@ class SCULPTLinear(nn.Linear, SCULPTLayer):
             self.weight.requires_grad = False
             # --- Mask Buffer ---
             # Registered buffer: saved in state_dict, moves to device, but no grad
-            self.register_buffer("mask", torch.ones(r_init))
+            self.register_buffer("lora_mask", torch.ones(r_init))
 
         self.reset_parameters()
         if fan_in_fan_out:
@@ -366,7 +366,7 @@ class SCULPTLinear(nn.Linear, SCULPTLayer):
             scores = self.get_importance_score()
             # If score >= threshold, keep (1), else prune (0)
             new_mask = (scores >= threshold).float()
-            self.mask.copy_(new_mask)
+            self.lora_mask.copy_(new_mask)
 
     def get_orthogonal_loss(self):
         """
@@ -404,7 +404,7 @@ class SCULPTLinear(nn.Linear, SCULPTLayer):
 
         with torch.no_grad():
             # 1. Identify kept indices
-            kept_indices = torch.nonzero(self.mask.view(-1)).squeeze()
+            kept_indices = torch.nonzero(self.lora_mask.view(-1)).squeeze()
             if kept_indices.numel() == 0:
                 print("Warning: All ranks pruned in a layer!")
                 # Just merge fixed subtraction if anything
@@ -452,7 +452,7 @@ class SCULPTLinear(nn.Linear, SCULPTLayer):
             
             # --- Trainable Branch ---
             # sigma_effective = sigma * mask
-            sigma_eff = self.lora_sigma.weight.view(-1) * self.mask
+            sigma_eff = self.lora_sigma.weight.view(-1) * self.lora_mask
   
             # Compute:
             step1 = self.lora_A(x_dropped) # x @ A.T
