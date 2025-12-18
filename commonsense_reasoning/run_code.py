@@ -119,11 +119,12 @@ def generate_and_tokenize_prompt(data_point):
 init_r_multiplier: int = 2
 orth_reg_weight: float = 0.1
 lasso_reg_weight: float = 0.0001
-t_start: int = 30
-t_end: int = 1000
+t_start: Union[int, float] = 0.05
+t_end: Union[int, float] = 0.80
 pruning_freq: int = 10
 base_model: str = "/new_home/zhangfanglve/models/meta-llama/Meta-Llama-3-8B"  # the only required argument
-data_path: str = "./ft-training_set/commonsense_15k.json"
+train_data_path: str = "./ft-training_set/commonsense_train_15k.json"
+valid_data_path: str = "./ft-training_set/commonsense_valid_1k.json"
 output_dir: str = "./outputs/test"
 adapter_name: str = "sculpt"
 load_8bit : bool = False
@@ -138,10 +139,11 @@ val_set_size: int = 120
 use_gradient_checkpointing: bool = True
 eval_step: int = 25
 save_step: int = 25
+warmup_steps: int = 100
 # lora hyperparams
 lora_r: int = 32
 lora_alpha: int = 32
-lora_dropout: float = 0.0
+lora_dropout: float = 0.05
 lora_target_modules: List[str] = None
 # bottleneck adapter hyperparams
 bottleneck_size: int = 256
@@ -178,7 +180,8 @@ print(
     f"t_end: {t_end}\n"
     f"pruning_freq: {pruning_freq}\n"
     f"base_model: {base_model}\n"
-    f"data_path: {data_path}\n"
+    f"train_data_path: {train_data_path}\n"
+    f"valid_data_path: {valid_data_path}\n"
     f"output_dir: {output_dir}\n"
     f"batch_size: {batch_size}\n"
     f"micro_batch_size: {micro_batch_size}\n"
@@ -268,6 +271,36 @@ tokenizer.pad_token_id = (
 )
 tokenizer.padding_side = "left"  # Allow batched inference
 
+data_files = {
+    "train": train_data_path,
+    "valid": valid_data_path,
+}
+data = load_dataset("json", data_files=data_files)
+
+train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
+val_data = data["valid"].shuffle().map(generate_and_tokenize_prompt)
+
+# 1. 准确计算总步数 (Total Steps)
+num_samples = len(train_data)
+steps_per_epoch = num_samples // batch_size
+total_steps = steps_per_epoch * num_epochs
+
+print(f"📊 Dataset Info: Samples={num_samples}, Total Steps={total_steps}")
+# 2. 智能转换 t_start (百分比 -> 整数步数)
+if isinstance(t_start, float) and 0.0 <= t_start <= 1.0:
+    old_val = t_start
+    t_start = int(total_steps * t_start)
+    print(f"🔄 Converted t_start: {old_val*100}% -> Step {t_start}")
+
+# 3. 智能转换 t_end (百分比 -> 整数步数)
+if isinstance(t_end, float) and 0.0 <= t_end <= 1.0:
+    old_val = t_end
+    t_end = int(total_steps * t_end)
+    print(f"🔄 Converted t_end:   {old_val*100}% -> Step {t_end}")
+
+# 4. 安全检查 (防止 t_start > t_end)
+if t_start >= t_end:
+    raise ValueError(f"❌ Error: t_start ({t_start}) must be smaller than t_end ({t_end})!")
 
 model = prepare_model_for_int8_training(model, use_gradient_checkpointing=use_gradient_checkpointing)
 print(model)
@@ -362,11 +395,6 @@ model = get_peft_model(model, config)
 if adapter_name == "prefix-tuning":
     model.to('cuda')
 
-if data_path.endswith(".json"):  # todo: support jsonl
-    data = load_dataset("json", data_files=data_path)
-else:
-    data = load_dataset(data_path)
-
 if resume_from_checkpoint:
     # Check the available weights and load them
     checkpoint_name = os.path.join(
@@ -389,19 +417,6 @@ if resume_from_checkpoint:
 
 model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
 
-if val_set_size > 0:
-    train_val = data["train"].train_test_split(
-        test_size=val_set_size, shuffle=True, seed=42
-    )
-    train_data = (
-        train_val["train"].shuffle().map(generate_and_tokenize_prompt)
-    )
-    val_data = (
-        train_val["test"].shuffle().map(generate_and_tokenize_prompt)
-    )
-else:
-    train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
-    val_data = None
 
 if not ddp and torch.cuda.device_count() > 1:
     # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available

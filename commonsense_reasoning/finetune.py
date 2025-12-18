@@ -17,10 +17,6 @@ import torch
 import transformers
 from datasets import load_dataset
 from typing import List, Optional, Union
-
-from utils.svdlora_trainer import SvdloraTrainer
-from utils.sculpt_trainer import sculptTrainer
-
 """
 Unused imports:
 import torch.nn as nn
@@ -57,12 +53,13 @@ def train(
         init_r_multiplier: int = 2,
         orth_reg_weight: float = 0.01,
         lasso_reg_weight: float = 0.001,
-        t_start: int = 100,
-        t_end: int = 1000,
+        t_start: Union[int, float] = 0.05,
+        t_end: Union[int, float] = 0.80,
         pruning_freq: int = 10,
         # model/data params
         base_model: str = "",  # the only required argument
-        data_path: str = "yahma/alpaca-cleaned",
+        train_data_path: str = "yahma/alpaca-cleaned",
+        valid_data_path: str = None,
         output_dir: str = "./lora-alpaca",
         adapter_name: str = "lora",
         load_8bit : bool = False,
@@ -77,6 +74,7 @@ def train(
         use_gradient_checkpointing: bool = False,
         eval_step: int = 200,
         save_step: int = 200,
+        warmup_steps: int = 100,
         lr_schedule_type: str = "cosine",
         # lora hyperparams
         lora_r: int = 8,
@@ -113,11 +111,11 @@ def train(
         f"orth_reg_weight: {orth_reg_weight}\n"
         f"lasso_reg_weight: {lasso_reg_weight}\n"
         f"t_start: {t_start}\n"
-        
         f"t_end: {t_end}\n"
         f"pruning_freq: {pruning_freq}\n"
         f"base_model: {base_model}\n"
-        f"data_path: {data_path}\n"
+        f"train_data_path: {train_data_path}\n"
+        f"valid_data_path: {valid_data_path}\n"
         f"output_dir: {output_dir}\n"
         f"batch_size: {batch_size}\n"
         f"micro_batch_size: {micro_batch_size}\n"
@@ -260,6 +258,37 @@ def train(
                                                                     ]  # could be sped up, probably
         return tokenized_full_prompt
     
+    data_files = {
+        "train": train_data_path,
+        "valid": valid_data_path,
+    }
+    data = load_dataset("json", data_files=data_files)
+
+    train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
+    val_data = data["valid"].shuffle().map(generate_and_tokenize_prompt)
+
+    # 1. 准确计算总步数 (Total Steps)
+    num_samples = len(train_data)
+    steps_per_epoch = num_samples // batch_size
+    total_steps = steps_per_epoch * num_epochs
+
+    print(f"📊 Dataset Info: Samples={num_samples}, Total Steps={total_steps}")
+    # 2. 智能转换 t_start (百分比 -> 整数步数)
+    if isinstance(t_start, float) and 0.0 <= t_start <= 1.0:
+        old_val = t_start
+        t_start = int(total_steps * t_start)
+        print(f"🔄 Converted t_start: {old_val*100}% -> Step {t_start}")
+
+    # 3. 智能转换 t_end (百分比 -> 整数步数)
+    if isinstance(t_end, float) and 0.0 <= t_end <= 1.0:
+        old_val = t_end
+        t_end = int(total_steps * t_end)
+        print(f"🔄 Converted t_end:   {old_val*100}% -> Step {t_end}")
+
+    # 4. 安全检查 (防止 t_start > t_end)
+    if t_start >= t_end:
+        raise ValueError(f"❌ Error: t_start ({t_start}) must be smaller than t_end ({t_end})!")
+
     model = prepare_model_for_int8_training(model, use_gradient_checkpointing=use_gradient_checkpointing)
     print(model)
     if adapter_name == "lora":
@@ -353,11 +382,6 @@ def train(
     if adapter_name == "prefix-tuning":
         model.to('cuda')
 
-    if data_path.endswith(".json"):  # todo: support jsonl
-        data = load_dataset("json", data_files=data_path)
-    else:
-        data = load_dataset(data_path)
-
     if resume_from_checkpoint:
         # Check the available weights and load them
         checkpoint_name = os.path.join(
@@ -380,20 +404,6 @@ def train(
 
     model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
 
-    if val_set_size > 0:
-        train_val = data["train"].train_test_split(
-            test_size=val_set_size, shuffle=True, seed=42
-        )
-        train_data = (
-            train_val["train"].shuffle().map(generate_and_tokenize_prompt)
-        )
-        val_data = (
-            train_val["test"].shuffle().map(generate_and_tokenize_prompt)
-        )
-    else:
-        train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
-        val_data = None
-
     if not ddp and torch.cuda.device_count() > 1:
         # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
         model.is_parallelizable = True
@@ -415,7 +425,7 @@ def train(
         args=transformers.TrainingArguments(
             per_device_train_batch_size=micro_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_steps=1000,
+            warmup_steps=warmup_steps,
             num_train_epochs=num_epochs,
             # max_steps=max_steps,
             learning_rate=learning_rate,
@@ -430,7 +440,7 @@ def train(
             save_steps=save_step,
             output_dir=output_dir,
             save_total_limit=3,
-            load_best_model_at_end=True if val_set_size > 0 else False,
+            load_best_model_at_end=True if valid_data_path else False,
             ddp_find_unused_parameters=False if ddp else None,
             group_by_length=group_by_length,
             report_to="wandb" if use_wandb else None,
@@ -440,25 +450,11 @@ def train(
             tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
         )
     )
-    start_time = time.time()
+
     trainer = get_trainer(trainer_params)
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    end_time = time.time()
-    training_time = end_time - start_time
-    
-    # 创建结果文件路径
-    result_file = os.path.join(output_dir, "ALL_results.txt")
-    
-    # 确保output_dir存在
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # 将训练时间写入文件
-    with open(result_file, "a") as f:
-        f.write(f"Training time: {training_time:.2f} seconds\n")
-        f.write(f"Training time: {training_time/60:.2f} minutes\n")
-        f.write(f"Training time: {training_time/3600:.2f} hours\n\n")
 
     model.save_pretrained(output_dir)
 
