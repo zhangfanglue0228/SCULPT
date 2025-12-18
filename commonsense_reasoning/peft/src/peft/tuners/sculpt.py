@@ -320,7 +320,7 @@ class SCULPTLinear(nn.Linear, SCULPTLayer):
             # lora_sigma: Singular Values vector, shape (r_init, 1) for easy broadcasting
             self.lora_sigma = nn.Linear(1, r_init, bias=False)
             
-            self.scaling = self.lora_alpha / self.r # Scaling factor
+            self.scaling = 1 # Scaling factor
             
             # Freeze base weight
             self.weight.requires_grad = False
