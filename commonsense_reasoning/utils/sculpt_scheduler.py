@@ -155,13 +155,14 @@ class SculptScheduler:
         for layer in self.sculpt_layers:
             layer.update_mask(threshold)
             # Optional: gather stats
-            total_kept += layer.mask.sum().item()
+            total_kept += layer.lora_mask.sum().item()
         
         metrics = {
             "sculpt/budget": current_budget,
             "sculpt/threshold": threshold,
             "sculpt/sparsity": 1.0 - (total_kept / self.total_rank_init),
-            "sculpt/kept_ranks": total_kept
+            "sculpt/kept_ranks": total_kept,
+            "sculpt/avg_kept_ranks": total_kept / len(self.sculpt_layers)
         }
 
         # Logging
