@@ -74,7 +74,7 @@ def train(
         use_gradient_checkpointing: bool = False,
         eval_step: int = 200,
         save_step: int = 200,
-        warmup_steps: int = 100,
+        warmup_steps: Union[int, float] = 0.03,
         lr_schedule_type: str = "cosine",
         # lora hyperparams
         lora_r: int = 8,
@@ -288,6 +288,11 @@ def train(
     # 4. 安全检查 (防止 t_start > t_end)
     if t_start >= t_end:
         raise ValueError(f"❌ Error: t_start ({t_start}) must be smaller than t_end ({t_end})!")
+
+    if isinstance(warmup_steps, float) and 0.0 <= warmup_steps <= 1.0:
+        old_val = warmup_steps
+        warmup_steps = int(total_steps * warmup_steps)
+        print(f"🔄 Converted warmup_steps: {old_val*100}% -> Step {warmup_steps}")
 
     model = prepare_model_for_int8_training(model, use_gradient_checkpointing=use_gradient_checkpointing)
     print(model)
