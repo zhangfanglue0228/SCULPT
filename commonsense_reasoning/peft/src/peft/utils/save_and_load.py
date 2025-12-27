@@ -145,10 +145,6 @@ def set_peft_model_state_dict(model, peft_model_state_dict):
         # model.peft_config.peft_type != PeftType.SVDinitLORA_v3
         model.peft_config.peft_type != PeftType.SVDLORA and
         model.peft_config.peft_type != PeftType.SVDLORA_v2 and
-        model.peft_config.peft_type != PeftType.SVDLORA_v3 and
-        model.peft_config.peft_type != PeftType.SVDLORA_res_v1 and
-        model.peft_config.peft_type != PeftType.SVDLORA_res_v2 and
-        model.peft_config.peft_type != PeftType.SVDLORA_res_v3 and
         # model.peft_config.peft_type != PeftType.SVDLORA_res_v4
         model.peft_config.peft_type != PeftType.SVDDORA
         ):

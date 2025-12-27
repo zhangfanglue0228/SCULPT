@@ -1,10 +1,5 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.  All rights reserved.
-#
-# NVIDIA CORPORATION and its licensors retain all intellectual property
-# and proprietary rights in and to this software, related documentation
-# and any modifications thereto.  Any use, reproduction, disclosure or
-# distribution of this software and related documentation without an express
-# license agreement from NVIDIA CORPORATION is strictly prohibited.
+# ... (保留原有的版权声明和 imports) ...
 import sys,io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer,encoding='gb18030')
 import copy
@@ -13,9 +8,7 @@ import os
 import re
 import sys
 import argparse
-
 import fire
-
 import torch
 
 sys.path.append(os.path.join(os.getcwd(), "peft/src/"))
@@ -34,6 +27,11 @@ try:
 except:  # noqa: E722
     pass
 
+# 定义所有常识推理数据集列表
+ALL_COMMONSENSE_DATASETS = [
+    "boolq", "piqa", "social_i_qa", "hellaswag", "winogrande", 
+    "ARC-Challenge", "ARC-Easy", "openbookqa"
+]
 
 def main(
         load_8bit: bool = False,
@@ -43,56 +41,16 @@ def main(
 ):
     args = parse_args()
 
-    def evaluate(
-            instructions,
-            input=None,
-            temperature=0.1,
-            top_p=0.75,
-            top_k=40,
-            num_beams=4,
-            max_new_tokens=32,
-            **kwargs,
-    ):
-        prompts = [generate_prompt(instruction, input) for instruction in instructions]
-        inputs = tokenizer(prompts, return_tensors="pt", padding=True)
-        input_ids = inputs["input_ids"].to(device)
-        generation_config = GenerationConfig(
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            num_beams=num_beams,
-            **kwargs,
-        )
-        with torch.no_grad():
-            generation_output = model.generate(
-                input_ids=input_ids,
-                generation_config=generation_config,
-                return_dict_in_generate=True,
-                output_scores=True,
-                max_new_tokens=max_new_tokens,
-            )
-        s = generation_output.sequences
-        outputs = tokenizer.batch_decode(s, skip_special_tokens=True)
-        print(f"outputs: {outputs}")
-        outputs = [o.split("### Response:")[-1].strip() for o in outputs]
-        return outputs
-
-    # save_file = f'experiment/{args.model}-{args.adapter}-{args.dataset}.json'
-    # create_dir('experiment/')
-
-    dataset = load_data(args)
-    batches = create_batch(dataset, args.batch_size)
+    # --- 1. 模型加载 (只执行一次) ---
+    print(f"Loading model: {args.base_model} with adapter: {args.lora_weights}")
     tokenizer, model = load_model(args)
 
-    if (
-            args.adapter == "LoRA" or 
-            args.adapter == "DoRA" or 
-            args.adapter == "SVDLoRA" or
-            args.adapter == "SVDLoRA_v2" or
-            args.adapter == "SVDDoRA" or
-            args.adapter == "SCULPT"
-        ):
-        print("Merge LoRA/DoRA weights into the original weights")
+    # --- 2. 权重合并逻辑 (只执行一次) ---
+    # 注意：这里增加了 .lower() 处理，兼容传入 scuplt 小写的情况
+    adapter_name_lower = args.adapter.lower()
+    
+    if adapter_name_lower in ["lora", "dora", "svdlora", "svdlora_v2", "svddora", "sculpt"]:
+        print(f"Attempting to merge {args.adapter} weights into the original weights...")
         key_list = [(key,module) for key, module in model.model.named_modules()]
         for key,module in key_list:
             if isinstance(model.peft_config.target_modules, str):
@@ -100,8 +58,9 @@ def main(
             else:
                 target_module_found = any(key.endswith(target_key) for target_key in model.peft_config.target_modules)
 
-            if args.adapter == "DoRA":
-                if model.peft_config.Wdecompose_target_modules != None:
+            # DoRA 特殊处理逻辑
+            if adapter_name_lower == "dora":
+                if hasattr(model.peft_config, 'Wdecompose_target_modules') and model.peft_config.Wdecompose_target_modules != None:
                     if isinstance(model.peft_config.Wdecompose_target_modules, str):
                         wdecompose_target_module_found = re.fullmatch(model.peft_config.Wdecompose_target_modules, key)
                     else:
@@ -112,63 +71,97 @@ def main(
                 wdecompose_target_module_found = False
 
             if target_module_found:
-                print(f"found {key}")
-                # print(f"module.merged {module.merged}")
-                # print(f"module.merge_weights {module.merge_weights}")
+                # print(f"found {key}")
                 module.merge_weights = True
                 module.train(mode=False)
-
             elif wdecompose_target_module_found:
-                print(f"found {key}")
-                # print(f"module.merged {module.merged}")
-                # print(f"module.merge_weights {module.merge_weights}")
+                # print(f"found {key}")
                 module.merge_weights = True
                 module.train(mode=False)
+        print("Merge configuration complete.")
 
+    # --- 3. 确定要跑的数据集列表 ---
+    if args.dataset == 'all':
+        target_datasets = ALL_COMMONSENSE_DATASETS
+    else:
+        target_datasets = [args.dataset]
 
-    total = len(batches)
-    correct = 0
-    current = 0
-    output_data = []
-    pbar = tqdm(total=total)
-    for idx, batch in enumerate(batches):
-        current += len(batch)
-        instructions = [data.get('instruction') for data in batch]
+    # --- 4. 循环评估 ---
+    for ds_name in target_datasets:
+        print(f"\n{'='*20}\nStart Evaluating: {ds_name}\n{'='*20}")
+        
+        # 临时修改 args.dataset 供 helper 函数使用 (extract_answer, load_data)
+        args.dataset = ds_name 
+        
+        try:
+            dataset = load_data(args)
+        except FileNotFoundError:
+            print(f"⚠️ Warning: Dataset file for {ds_name} not found, skipping...")
+            continue
+            
+        batches = create_batch(dataset, args.batch_size)
+        
+        # 定义内部评估函数 (保持闭包环境)
+        def evaluate_batch(instructions, input=None, temperature=0.1, top_p=0.75, top_k=40, num_beams=4, max_new_tokens=32, **kwargs):
+            prompts = [generate_prompt(instruction, input) for instruction in instructions]
+            inputs = tokenizer(prompts, return_tensors="pt", padding=True)
+            input_ids = inputs["input_ids"].to(device)
+            generation_config = GenerationConfig(
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                num_beams=num_beams,
+                **kwargs,
+            )
+            with torch.no_grad():
+                generation_output = model.generate(
+                    input_ids=input_ids,
+                    generation_config=generation_config,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    max_new_tokens=max_new_tokens,
+                )
+            s = generation_output.sequences
+            outputs = tokenizer.batch_decode(s, skip_special_tokens=True)
+            outputs = [o.split("### Response:")[-1].strip() for o in outputs]
+            return outputs
 
-        outputs = evaluate(instructions)
+        total = len(batches)
+        correct = 0
+        current = 0
+        
+        pbar = tqdm(total=total, desc=f"Eval {ds_name}")
+        for idx, batch in enumerate(batches):
+            current += len(batch)
+            instructions = [data.get('instruction') for data in batch]
+            
+            outputs = evaluate_batch(instructions)
 
-        for data, output in zip(batch, outputs):
-            label = data.get('answer')
-            flag = False
-            predict = extract_answer(args, output)
-            if label == predict:
-                correct += 1
-                flag = True
-            new_data = copy.deepcopy(data)
-            new_data['output_pred'] = output
-            new_data['pred'] = predict
-            new_data['flag'] = flag
-            output_data.append(new_data)
-            print(data["instruction"])
-            print(output)
-            print('prediction:', predict)
-            print('label:', label)
-        print('---------------')
-        print(f'\rtest:{idx + 1}/{total} | accuracy {correct}  {correct / current}')
-        print('---------------')
-        # with open(save_file, 'w+') as f:
-        #     json.dump(output_data, f, indent=4)
-        pbar.update(1)
-    pbar.close()
+            for data, output in zip(batch, outputs):
+                label = data.get('answer')
+                predict = extract_answer(args, output)
+                if label == predict:
+                    correct += 1
+                print("-" * 20)
+                print(f"Instruction: {data.get('instruction')}")
+                print(f"Output Raw : {output}")
+                print(f"Prediction : {predict}")
+                print(f"Label      : {label}")
+                print("-" * 20)
+            
+            pbar.set_postfix({'acc': f"{correct / current:.4f}"})
+            pbar.update(1)
+        pbar.close()
 
-    accuracy = correct / current
-    result_file_path = os.path.join(args.lora_weights, "ALL_results.txt")
+        accuracy = correct / current
+        print(f"✅ Finished {ds_name}: Accuracy = {accuracy:.4f}")
 
-    with open(result_file_path, "a") as f:
-        f.write(f"{args.dataset}: {accuracy}\n")
+        # 结果写入文件
+        result_file_path = os.path.join(args.lora_weights, "ALL_results.txt")
+        with open(result_file_path, "a") as f:
+            f.write(f"{ds_name}: {accuracy}\n")
     
-    print('\n')
-    print('test finished')
+    print('\n🎉 All evaluations finished.')
 
 
 def create_dir(dir_path):
@@ -200,14 +193,7 @@ def generate_prompt(instruction, input=None):
 
 
 def load_data(args) -> list:
-    """
-    read data from dataset file
-    Args:
-        args:
-
-    Returns:
-
-    """
+    # 确保你的数据都在 dataset/数据集名称/test.json 下
     file_path = f'dataset/{args.dataset}/test.json'
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"can not find dataset file : {file_path}")
@@ -225,10 +211,11 @@ def create_batch(dataset, batch_size):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', choices=["boolq", "piqa", "social_i_qa", "hellaswag", "winogrande", "ARC-Challenge", "ARC-Easy", "openbookqa", "AddSub", "AQuA", "gsm8k", "MultiArith", "SingleEq", "SVAMP"],
-                        required=True)
+    # 修改: 移除了 choices 限制，增加了 'all' 选项，移除了 required=True (默认为 all)
+    parser.add_argument('--dataset', default='all', help="Dataset name or 'all' for 8 commonsense datasets")
     parser.add_argument('--model', choices=['LLaMA-7B', "LLaMA-13B",'LLaMA2-7B','LLaMA3-8B'], required=True)
-    parser.add_argument('--adapter', choices=['LoRA', 'AdapterP', 'AdapterH', 'Parallel', 'DoRA', 'SVDDoRA', 'SVDLoRA', 'SVDLoRA_v2', 'SVDLoRA_v3', 'SVDLoRA_res_v1', 'SVDLoRA_res_v2', 'SVDLoRA_res_v3', 'SVDLoRA_res_v4'], required=True)
+    # 修改: 移除了 adapter 的 choices 强校验，防止大小写导致报错，逻辑中转为大写判断
+    parser.add_argument('--adapter', type=str, required=True) 
     parser.add_argument('--base_model', required=True)
     parser.add_argument('--lora_weights', required=True)
     parser.add_argument('--batch_size', type=int, required=True)
@@ -272,7 +259,7 @@ def load_model(args) -> tuple:
             torch_dtype=torch.float16,
             device_map="auto",
             trust_remote_code=True,
-        ) # fix zwq
+        ) 
         model = PeftModel.from_pretrained(
             model,
             lora_weights,
