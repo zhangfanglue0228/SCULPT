@@ -199,21 +199,23 @@ class SCULPT_Model(torch.nn.Module):
             # Truncate to r_init
             r_init = new_module.r_init
             u = u[:, :r_init]        # (out, r_init) -> lora_B (Down projection)
-            s = s[:r_init]           # (r_init,)
+            # s = s[:r_init]           # (r_init,)
             vh = vh[:r_init, :]      # (r_init, in)  -> lora_A (Up projection)
 
             # Initialize Trainable Branch
             new_module.lora_B.weight.data.copy_(u)
-            new_module.lora_sigma.weight.data.copy_(s.unsqueeze(1)) # (r, 1) to act as vector
+            # new_module.lora_sigma.weight.data.copy_(s.unsqueeze(1)) # (r, 1) to act as vector
             new_module.lora_A.weight.data.copy_(vh)
+            # Sigma 零初始化 (Zero-Init)
+            nn.init.zeros_(new_module.lora_sigma.weight)
 
-            weight_low = torch.mm(u * s, vh)
-            weight_low = weight_low * new_module.scaling
-            weight_low = transpose(weight_low, new_module.fan_in_fan_out)
-            new_module.weight.data -= weight_low.to(new_module.weight.device)
+            # weight_low = torch.mm(u * s, vh)
+            # weight_low = weight_low * new_module.scaling
+            # weight_low = transpose(weight_low, new_module.fan_in_fan_out)
+            # new_module.weight.data -= weight_low.to(new_module.weight.device)
 
         # Clean up
-        del u, s, vh, weight_low, weight_for_svd
+        del u, s, vh, weight_for_svd
         # torch.cuda.empty_cache()
 
         if old_module.bias is not None:
@@ -320,7 +322,7 @@ class SCULPTLinear(nn.Linear, SCULPTLayer):
             # lora_sigma: Singular Values vector, shape (r_init, 1) for easy broadcasting
             self.lora_sigma = nn.Linear(1, r_init, bias=False)
             
-            self.scaling = 1 # Scaling factor
+            self.scaling = lora_alpha / r # Scaling factor
             
             # Freeze base weight
             self.weight.requires_grad = False
