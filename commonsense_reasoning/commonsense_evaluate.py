@@ -165,8 +165,8 @@ def main(
         
     average_accuracy = total_accuracy / len(target_datasets)
     result_file_path = os.path.join(args.lora_weights, "ALL_results.txt")
-        with open(result_file_path, "a") as f:
-            f.write(f"Average Accuracy: {average_accuracy}\n")
+    with open(result_file_path, "a") as f:
+        f.write(f"\nAverage Accuracy: {average_accuracy}\n")
     print(f"\nAverage Accuracy: {average_accuracy:.4f}")
     print('\nAll evaluations finished.')
 
