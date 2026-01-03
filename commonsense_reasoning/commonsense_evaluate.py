@@ -87,6 +87,7 @@ def main(
         target_datasets = [args.dataset]
 
     # --- 4. 循环评估 ---
+    total_accuracy = 0.0
     for ds_name in target_datasets:
         print(f"\n{'='*20}\nStart Evaluating: {ds_name}\n{'='*20}")
         
@@ -154,14 +155,20 @@ def main(
         pbar.close()
 
         accuracy = correct / current
-        print(f"✅ Finished {ds_name}: Accuracy = {accuracy:.4f}")
+        total_accuracy += accuracy
+        print(f"Finished {ds_name}: Accuracy = {accuracy:.4f}")
 
         # 结果写入文件
         result_file_path = os.path.join(args.lora_weights, "ALL_results.txt")
         with open(result_file_path, "a") as f:
             f.write(f"{ds_name}: {accuracy}\n")
-    
-    print('\n🎉 All evaluations finished.')
+        
+    average_accuracy = total_accuracy / len(target_datasets)
+    result_file_path = os.path.join(args.lora_weights, "ALL_results.txt")
+        with open(result_file_path, "a") as f:
+            f.write(f"Average Accuracy: {average_accuracy}\n")
+    print(f"\nAverage Accuracy: {average_accuracy:.4f}")
+    print('\nAll evaluations finished.')
 
 
 def create_dir(dir_path):
