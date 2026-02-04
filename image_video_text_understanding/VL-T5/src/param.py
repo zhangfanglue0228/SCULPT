@@ -212,6 +212,22 @@ def parse_args(parse=True, **optional_kwargs):
     # svddora
     parser.add_argument('--use_svddora', action="store_true")
 
+    # sculpt
+    parser.add_argument('--use_sculpt', action="store_true", help='Enable SCULPT tuning')
+    
+    # 结构参数
+    parser.add_argument('--sculpt_r', type=int, default=8, help='Target rank (final rank) for SCULPT')
+    parser.add_argument('--sculpt_init_r_multiplier', type=int, default=2, help='Multiplier for initial search rank (r_init = r * multiplier)')
+    
+    # 正则化参数
+    parser.add_argument('--orth_reg_weight', type=float, default=0.1, help='Weight for orthogonal regularization')
+    parser.add_argument('--lasso_reg_weight', type=float, default=0.01, help='Weight for Lasso (L1) regularization on singular values')
+    
+    # 剪枝调度参数
+    parser.add_argument('--sculpt_t_start', type=int, default=100, help='Step to start pruning')
+    parser.add_argument('--sculpt_t_end', type=int, default=1000, help='Step to end pruning (reach target rank)')
+    parser.add_argument('--sculpt_pruning_freq', type=int, default=10, help='Frequency of mask updates')
+
     # unfreeze_layer_norm_encoder or decoder
     parser.add_argument('--unfreeze_encoder_layer_norms', action="store_true")
     parser.add_argument('--unfreeze_decoder_layer_norms', action="store_true")

@@ -8,7 +8,7 @@
 import time
 time_str = time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime(time.time()))
 
-from trainer_base import TrainerBase
+from trainer_base import TrainerBase, SculptScheduler
 import torch.backends.cudnn as cudnn
 import torch.multiprocessing as mp
 import torch.distributed as dist
@@ -175,6 +175,12 @@ class Trainer(TrainerBase):
         if self.verbose:
             print(f'It took {time() - start:.1f}s')
 
+        if getattr(args, 'use_sculpt', False):
+            # 初始化 SCULPT 调度器
+            self.sculpt_scheduler = SculptScheduler(self.model, args)
+        else:
+            self.sculpt_scheduler = None
+
     def train(self):
         if self.verbose:
             vqa_loss_meter = LossMeter()
@@ -295,24 +301,42 @@ class Trainer(TrainerBase):
 
                 loss = results['loss']
 
-                reg_loss = 0.0
-                for module in self.model.modules():
-                    if hasattr(module, 'lora_A') and hasattr(module, 'lora_B'):
-                        U = module.lora_B
-                        V = module.lora_A
+                if getattr(self.args, 'use_sculpt', False):
+                    # 1. 计算正则化 Loss (正交 + Lasso)
+                    sculpt_reg_loss = 0.0
                     
-                        # Calculate the orthogonal loss of U^T U
-                        UtU = torch.mm(U.t(), U)
-                        I_U = torch.eye(UtU.size(0), device=UtU.device)
-                        reg_U = torch.linalg.matrix_norm(UtU - I_U, ord='fro') ** 2  # Frobenius norm squared
-                        
-                        # Calculate the orthogonal loss of V^T V
-                        VtV = torch.mm(V, V.t())
-                        I_V = torch.eye(VtV.size(0), device=VtV.device)
-                        reg_V = torch.linalg.matrix_norm(VtV - I_V, ord='fro') ** 2
+                    # 获取权重参数 (建议在 param.py 中定义默认值，这里做个兜底)
+                    orth_weight = getattr(self.args, 'orth_reg_weight', 0.1)
+                    lasso_weight = getattr(self.args, 'lasso_reg_weight', 0.01)
 
-                        reg_loss += reg_U + reg_V
-                loss += reg_loss * self.args.lambda_reg
+                    # 遍历调度器中缓存的层，避免重复遍历整个模型
+                    if self.sculpt_scheduler:
+                        for layer in self.sculpt_scheduler.sculpt_layers:
+                            if orth_weight > 0:
+                                sculpt_reg_loss += orth_weight * layer.get_orthogonal_loss()
+                            if lasso_weight > 0:
+                                sculpt_reg_loss += lasso_weight * layer.get_l1_norm()
+                    
+                    loss += sculpt_reg_loss
+
+                # reg_loss = 0.0
+                # for module in self.model.modules():
+                #     if hasattr(module, 'lora_A') and hasattr(module, 'lora_B'):
+                #         U = module.lora_B
+                #         V = module.lora_A
+                    
+                #         # Calculate the orthogonal loss of U^T U
+                #         UtU = torch.mm(U.t(), U)
+                #         I_U = torch.eye(UtU.size(0), device=UtU.device)
+                #         reg_U = torch.linalg.matrix_norm(UtU - I_U, ord='fro') ** 2  # Frobenius norm squared
+                        
+                #         # Calculate the orthogonal loss of V^T V
+                #         VtV = torch.mm(V, V.t())
+                #         I_V = torch.eye(VtV.size(0), device=VtV.device)
+                #         reg_V = torch.linalg.matrix_norm(VtV - I_V, ord='fro') ** 2
+
+                #         reg_loss += reg_U + reg_V
+                # loss += reg_loss * self.args.lambda_reg
 
                 if self.args.track_z:
                     reg_loss = 0
@@ -367,6 +391,16 @@ class Trainer(TrainerBase):
                     self.scaler.update()
                 else:
                     self.optim.step()
+
+                if getattr(self.args, 'use_sculpt', False) and self.sculpt_scheduler:
+                    # 执行剪枝调度 (内部会检查 freq 和 global_step)
+                    sculpt_metrics = self.sculpt_scheduler.step(global_step)
+                    
+                    # 如果需要记录日志 (Optional)
+                    if sculpt_metrics and self.verbose:
+                        # 这里的 log_dict 是你代码上下文中的变量，或者直接打印
+                        # 也可以添加到 wandb_log_dict 中 (如果有的话)
+                        pass
 
                 if self.lr_scheduler:
                     self.lr_scheduler.step()

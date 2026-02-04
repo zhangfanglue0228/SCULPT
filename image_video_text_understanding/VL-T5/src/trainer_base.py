@@ -20,6 +20,8 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import math
 import logging
 import shutil
 from pprint import pprint
@@ -220,7 +222,6 @@ class SVDLoraLinear(nn.Module):
             self.in_features, self.out_features, self.bias is not None, self.lora.r, self.scaling
         )
     
-
 class SVDDoraLinear(nn.Module):
     def __init__(self, m: torch.nn.Linear, lora_r= 1, lora_dropout = 0.0, lora_s = 1.0, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
@@ -300,6 +301,230 @@ class SVDDoraLinear(nn.Module):
             self.in_features, self.out_features, self.bias is not None, self.lora.r, self.scaling
         )
 
+class SCULPTLinear(nn.Module):
+    """
+    SCULPT Linear Layer for VL-T5.
+    Replaces a standard nn.Linear layer.
+    """
+    def __init__(
+        self, 
+        base_layer: nn.Linear, 
+        r: int, 
+        init_r_multiplier: int = 2, 
+        lora_alpha: int = 1, 
+        lora_dropout: float = 0.0,
+        device=None, 
+        dtype=None
+    ):
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        super().__init__()
+        
+        # 1. 复制基础层属性
+        self.in_features = base_layer.in_features
+        self.out_features = base_layer.out_features
+        
+        # 冻结的预训练权重 W0
+        self.weight = nn.Parameter(
+            base_layer.weight.detach().clone(), 
+            requires_grad=False
+        )
+        if base_layer.bias is not None:
+            self.bias = nn.Parameter(
+                base_layer.bias.detach().clone(), 
+                requires_grad=True # SCULPT 通常允许 Bias 训练，可根据 args 配置调整
+            )
+        else:
+            self.register_parameter('bias', None)
+
+        # 2. SCULPT 参数
+        self.r = r  # 目标秩 (Final Target Rank)
+        self.r_init = r * init_r_multiplier # 初始搜索秩
+        self.scaling = lora_alpha / r
+        self.lora_dropout = nn.Dropout(p=lora_dropout) if lora_dropout > 0 else nn.Identity()
+        self.merged = False
+        
+        # 3. SVD 初始化 (核心逻辑)
+        # 对 W0 进行 SVD 分解: W0 = U * S * Vh
+        with torch.no_grad():
+            w_float = self.weight.data.float()
+            u, s, vh = torch.linalg.svd(w_float, full_matrices=False)
+            
+            # 截断
+            u_init = u[:, :self.r_init]        # (out, r_init)
+            # s_init = s[:self.r_init]         # (r_init,) -> 不直接使用，我们初始化 sigma 为 0
+            vh_init = vh[:self.r_init, :]      # (r_init, in)
+
+        # 4. 定义可训练参数 (Trainable Branch)
+        # lora_A (V^T): (r_init, in)
+        self.lora_A = nn.Linear(self.in_features, self.r_init, bias=False)
+        # lora_B (U): (out, r_init)
+        self.lora_B = nn.Linear(self.r_init, self.out_features, bias=False)
+        # lora_sigma: (r_init, 1) 对角矩阵向量化
+        self.lora_sigma = nn.Linear(1, self.r_init, bias=False)
+
+        # 5. 参数初始化
+        with torch.no_grad():
+            self.lora_A.weight.data.copy_(vh_init)
+            self.lora_B.weight.data.copy_(u_init)
+            nn.init.zeros_(self.lora_sigma.weight)
+
+        # 6. 注册 Mask Buffer (不参与梯度更新)
+        self.register_buffer("lora_mask", torch.ones(self.r_init))
+        
+        # 移动到正确设备
+        self.to(device)
+
+    def get_importance_score(self):
+        """Calculates importance score: Score = |s| * |grad(s)|"""
+        if self.lora_sigma.weight.grad is None:
+            return torch.zeros_like(self.lora_sigma.weight.view(-1))
+        
+        s = self.lora_sigma.weight.view(-1)
+        grad = self.lora_sigma.weight.grad.view(-1)
+        score = torch.abs(s) * torch.abs(grad)
+        return score
+
+    def update_mask(self, threshold):
+        """Updates mask based on global threshold."""
+        with torch.no_grad():
+            scores = self.get_importance_score()
+            new_mask = (scores >= threshold).float()
+            self.lora_mask.copy_(new_mask)
+
+    def get_orthogonal_loss(self):
+        """||P_down^T P_down - I||^2 + ||P_up P_up^T - I||^2"""
+        # lora_B is U (out, r)
+        U = self.lora_B.weight
+        # lora_A is V^T (r, in). V is A^T (in, r)
+        V = self.lora_A.weight.T 
+
+        def orth_loss_matrix(M):
+            MtM = torch.mm(M.t(), M)
+            I = torch.eye(MtM.size(0), device=M.device)
+            return torch.norm(MtM - I, p='fro') ** 2
+
+        loss_U = orth_loss_matrix(U)
+        loss_V = orth_loss_matrix(V)
+        return loss_U + loss_V
+
+    def get_l1_norm(self):
+        """Calculate L1 norm of trainable singular values."""
+        return torch.sum(torch.abs(self.lora_sigma.weight))
+
+    def forward(self, x: torch.Tensor):
+        # 1. Base Forward (Frozen W0)
+        # F.linear uses (input, weight.T) convention implies weight is (out, in)
+        result = F.linear(x, self.weight, bias=self.bias)
+        
+        if self.merged:
+            return result
+
+        # 2. SCULPT Delta Forward
+        # Y = W0*x + scaling * (U * (S * Mask) * V^T) * x
+        
+        x_dropped = self.lora_dropout(x.to(self.lora_A.weight.dtype))
+        
+        # Effective Sigma
+        sigma_eff = self.lora_sigma.weight.view(-1) * self.lora_mask
+        
+        # Compute Path
+        # Step 1: x @ V (x @ A.T)
+        step1 = self.lora_A(x_dropped) 
+        # Step 2: Multiply Sigma
+        step2 = step1 * sigma_eff 
+        # Step 3: @ U.T (B(step2))
+        term_train = self.lora_B(step2)
+        
+        delta_output = term_train * self.scaling
+        
+        return result + delta_output
+
+class SculptScheduler:
+    """
+    Global Pruning Scheduler for SCULPT.
+    """
+    def __init__(self, model: nn.Module, args):
+        self.model = model
+        self.args = args
+        
+        # 参数从 args 读取
+        self.t_start = getattr(args, 'sculpt_t_start', 100)
+        self.t_end = getattr(args, 'sculpt_t_end', 1000)
+        self.pruning_freq = getattr(args, 'sculpt_pruning_freq', 10)
+        self.r_target = getattr(args, 'sculpt_r', 8)
+        self.r_init = self.r_target * getattr(args, 'sculpt_init_r_multiplier', 2)
+        
+        # 收集所有 SCULPT 层
+        self.sculpt_layers = self._get_sculpt_layers(model)
+        self.num_layers = len(self.sculpt_layers)
+        
+        self.total_rank_init = self.num_layers * self.r_init
+        self.total_rank_final = self.num_layers * self.r_target
+        
+        print(f"[SCULPT] Scheduler Initialized. Layers: {self.num_layers}, "
+              f"Rank Budget: {self.total_rank_init} -> {self.total_rank_final}")
+
+    def _get_sculpt_layers(self, model):
+        layers = []
+        for m in model.modules():
+            if isinstance(m, SCULPTLinear):
+                layers.append(m)
+        return layers
+
+    def calculate_budget(self, global_step):
+        if global_step < self.t_start:
+            return self.total_rank_init
+        if global_step >= self.t_end:
+            return self.total_rank_final
+        
+        # Cubic Decay
+        progress = (global_step - self.t_start) / (self.t_end - self.t_start)
+        decay_factor = (1 - progress) ** 3
+        current_budget = self.total_rank_final + (self.total_rank_init - self.total_rank_final) * decay_factor
+        return int(current_budget)
+
+    def step(self, global_step):
+        # 频率检查
+        if global_step % self.pruning_freq != 0:
+            return None
+        if global_step < self.t_start or global_step > self.t_end:
+            return None
+
+        current_budget = self.calculate_budget(global_step)
+        
+        # 收集全局分数
+        all_scores_list = []
+        for layer in self.sculpt_layers:
+            # 移动到 CPU 计算分位点
+            score = layer.get_importance_score().detach().to(device="cpu", dtype=torch.float32)
+            all_scores_list.append(score)
+        
+        if not all_scores_list:
+            return None
+            
+        global_scores = torch.cat(all_scores_list)
+        if global_scores.sum() == 0:
+            return None
+            
+        # 确定阈值
+        k = min(current_budget, global_scores.numel())
+        k = max(k, 1)
+        sorted_scores, _ = torch.sort(global_scores, descending=True)
+        threshold = sorted_scores[k - 1].item()
+        
+        # 更新 Mask
+        total_kept = 0
+        for layer in self.sculpt_layers:
+            layer.update_mask(threshold)
+            total_kept += layer.lora_mask.sum().item()
+            
+        metrics = {
+            "sculpt_budget": current_budget,
+            "sculpt_threshold": threshold,
+            "sculpt_kept_ranks": total_kept,
+            "sculpt_sparsity": 1.0 - (total_kept / self.total_rank_init)
+        }
+        return metrics
 
 class TrainerBase(object):
     def __init__(self, args, train_loader=None, val_loader=None, test_loader=None, train=True):
@@ -666,7 +891,64 @@ class TrainerBase(object):
                             replace_m.svd_V.weight.requires_grad = False
                             replace_m.bias.requires_grad = True
                             del p
+        
+        if self.args.use_sculpt:
+            print("Applying SCULPT tuning...")
+            sculpt_r = getattr(self.args, 'sculpt_r', 8)
+            init_r_multiplier = getattr(self.args, 'sculpt_init_r_multiplier', 2)
+            lora_alpha = getattr(self.args, 'lora_alpha', 16) # 复用 lora_alpha 或 args.sculpt_alpha
+            lora_dropout = getattr(self.args, 'dropout', 0.1)
 
+            if self.args.lora_settings: # 假设沿用 lora_settings 决定替换哪些层
+                target_modules_list = ["layers"] # T5/BART 通常是 layers
+                target_suffixes = ["v_proj", "q_proj"] # 目标层后缀
+
+                it = [(name, m) for name, m in self.model.named_modules()]
+                module_dict = {name: m for name, m in it}
+
+                for n, p in it:
+                    # 检查是否为目标层
+                    if not isinstance(p, nn.Linear):
+                        continue
+                    
+                    is_target = any(t in n for t in target_modules_list) and \
+                                any(n.endswith(suffix) for suffix in target_suffixes)
+                    
+                    if is_target:
+                        # 找到父模块进行替换
+                        idx = n.rfind('.')
+                        father_name = n[:idx] if idx != -1 else ""
+                        child_name = n[idx+1:]
+                        
+                        if father_name in module_dict:
+                            father_module = module_dict[father_name]
+                        else:
+                            continue # Should not happen
+
+                        print(f"Replacing {n} with SCULPTLinear (r={sculpt_r}, r_init={sculpt_r*init_r_multiplier})")
+                        
+                        # 实例化 SCULPTLinear
+                        replace_m = SCULPTLinear(
+                            base_layer=p,
+                            r=sculpt_r,
+                            init_r_multiplier=init_r_multiplier,
+                            lora_alpha=lora_alpha,
+                            lora_dropout=lora_dropout,
+                            device=p.weight.device,
+                            dtype=p.weight.dtype
+                        )
+                        
+                        # 替换
+                        setattr(father_module, child_name, replace_m)
+                        
+                        replace_m.weight.requires_grad = False       # 冻结 W0
+                        replace_m.lora_A.weight.requires_grad = True # 训练 P_up
+                        replace_m.lora_B.weight.requires_grad = True # 训练 P_down
+                        replace_m.lora_sigma.weight.requires_grad = True # 训练 Sigma
+                        if replace_m.bias is not None:
+                            replace_m.bias.requires_grad = True      # 训练 Bias
+                        # 释放原层显存
+                        del p
 
         if self.args.unfreeze_bias:
             targets = ["bias"]
